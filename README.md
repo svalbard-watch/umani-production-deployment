@@ -19,6 +19,7 @@ Set these in Dokploy (Environment tab). [.env.example](.env.example) is the temp
 |---|---|---|
 | `UMAMI_HOST` | yes | Public hostname for the Traefik router |
 | `UMAMI_APP_SECRET` | yes | Random secret for signing sessions (`openssl rand -base64 32`) |
+| `UMAMI_TWO_FACTOR_KEY` | yes | Encrypts stored 2FA secrets, exactly 64 hex characters (`openssl rand -hex 32`). Keep it stable |
 | `UMAMI_DB_PWD` | yes | Postgres password, URL-safe characters only (`openssl rand -hex 24`) |
 | `TRAEFIK_CERT_RESOLVER` | no | Defaults to `letsencrypt`; empty locally |
 
