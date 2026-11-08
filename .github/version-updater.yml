@@ -1,0 +1,21 @@
+# Config for update_versions.py (run daily by .github/workflows/update-versions.yml).
+#
+# Keys under `images` are image names exactly as written in compose.yml, without the tag.
+# Default rule: the newest tag with the same shape as the pinned one (same prefix, suffix
+# and number of numeric parts - so `3.4.1` only moves to `X.Y.Z`, never to `3.4` or `3`).
+
+# Images never to touch, e.g. while a known-bad release is out.
+ignore: []
+
+images:
+  ghcr.io/umami-software/umami:
+    release_notes_repo: umami-software/umami
+
+  # Stay on the pinned Postgres major: a major upgrade needs a dump/restore or pg_upgrade
+  # of the data volume and must be done by hand (then change the 17 below).
+  postgres:
+    tag_pattern: '^(?P<version>17\.\d+)-alpine$'
+
+  # Local/CI test harness only (traefik-testing/compose.yml), not deployed.
+  traefik:
+    release_notes_repo: traefik/traefik

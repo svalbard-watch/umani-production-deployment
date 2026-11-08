@@ -1,0 +1,115 @@
+name: Update component versions
+
+# Checks every image pinned in compose.yml for a newer tag that actually exists in its
+# registry (update_versions.py) and opens one PR into main per image, from a
+# deps/<image> branch, with the upstream release notes in the body. Never commits to main
+# and never merges: merging the PR is the human gate, and Dokploy redeploys main on merge.
+# Later runs refresh the same PR instead of opening a duplicate.
+#
+# Image tags to skip or special-case: .github/version-updater.yml.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only report what would change (job summary), don't open PRs"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-updater
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Checkout main  # zizmor: ignore[artipacked] credentials needed: pushes the version bump branches (git push)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+
+      - name: PIP Install
+        run: pip install pyyaml
+
+      - name: Check for new versions
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python update_versions.py --dry-run --summary --json "$RUNNER_TEMP/plan.json"
+          echo "images=$(jq -c '[.[] | .name] | unique' "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Open or refresh bump PRs
+        if: ${{ !inputs.dry_run && steps.check.outputs.images != '[]' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGES: ${{ steps.check.outputs.images }}
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+
+          jq -r '.[]' <<< "$IMAGES" | while IFS= read -r name; do
+            branch="deps/$(echo "$name" | tr '/:' '--')"
+            git checkout --quiet -B "$branch" origin/main
+
+            python update_versions.py --image "$name" \
+              --json "$RUNNER_TEMP/change.json" --notes "$RUNNER_TEMP/body.md"
+            if git diff --quiet; then
+              echo "$name: nothing to apply any more - skipping."
+              continue
+            fi
+            title=$(jq -r '"Bump \(.[0].name) \(.[0].old) → \(.[0].new)"' "$RUNNER_TEMP/change.json")
+            {
+              echo "Opened automatically by \`update-versions.yml\`. Merging redeploys production through Dokploy."
+              echo
+              cat "$RUNNER_TEMP/body.md"
+            } > "$RUNNER_TEMP/pr-body.md"
+
+            git add -A -- '*compose*.yml'
+            git commit --quiet -m "$title"
+
+            # Only force-push when the content actually changed (new upstream version, or
+            # main moved on), so an open PR isn't churned every day.
+            pushed=false
+            if git rev-parse --verify --quiet "origin/$branch" >/dev/null && \
+               git diff --quiet "origin/$branch" HEAD; then
+              echo "$name: $branch already up to date."
+            else
+              git push --force origin "HEAD:refs/heads/$branch"
+              pushed=true
+            fi
+
+            existing=$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number')
+            if [ -n "$existing" ]; then
+              gh pr edit "$existing" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+              echo "$name: refreshed PR #$existing"
+            else
+              gh pr create --head "$branch" --base main --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+              pushed=true
+            fi
+
+            # A PR opened or pushed with GITHUB_TOKEN does not trigger pull_request
+            # workflows (GitHub's anti-recursion rule). workflow_dispatch is exempt, and
+            # the check runs attach to the branch head commit, so they show on the PR.
+            if [ "$pushed" = true ]; then
+              gh workflow run deploy-smoke-test.yml --ref "$branch"
+              gh workflow run scan-deployed-images.yml --ref "$branch"
+            fi
+          done
