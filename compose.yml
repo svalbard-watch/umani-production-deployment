@@ -1,0 +1,109 @@
+name: SW-UMAMI-Services
+
+# Umami web analytics (umami + PostgreSQL) as a single Dokploy stack (Docker Swarm mode,
+# single node). Dokploy only accepts one compose file per project.
+#
+# Production only: there is no staging variant. Everything environment-specific comes from
+# environment variables (set in Dokploy; .env.example lists them). Secrets are plain env
+# vars, as in swi-production-deployment, and never live in the repo.
+#
+# Image tags are pinned exactly. .github/workflows/update-versions.yml opens a PR into main
+# when a newer tag exists; merging it redeploys through Dokploy.
+#
+# Permissions (Swarm honours cap_drop, read_only and user; it ignores security_opt and the
+# tmpfs: shorthand, hence the `type: tmpfs` volume mounts):
+#   - Capabilities are dropped on both containers.
+#   - Postgres runs as its own user from the start (the image's root-then-gosu switch needs
+#     capabilities we drop). A fresh named volume is initialised by the image owned by that
+#     user.
+
+services:
+
+  umami:
+    image: ghcr.io/umami-software/umami:3.4.1
+    restart: unless-stopped
+    cap_drop: [ALL]
+    read_only: true
+    environment:
+      - DATABASE_URL=postgresql://umami:${UMAMI_DB_PWD?Variable not set}@db:5432/umami
+      - APP_SECRET=${UMAMI_APP_SECRET?Variable not set}
+      - DISABLE_TELEMETRY=1
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - type: tmpfs
+        target: /tmp
+      - type: tmpfs
+        target: /app/.next/cache
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.routers.umami.rule=Host(`${UMAMI_HOST?Variable not set}`)"
+      - "traefik.http.routers.umami.entrypoints=websecure"
+      - "traefik.http.routers.umami.tls=true"
+      - "traefik.http.routers.umami.tls.certresolver=${TRAEFIK_CERT_RESOLVER-letsencrypt}"
+      - "traefik.http.services.umami.loadbalancer.server.port=3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:3000/api/heartbeat >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dokploy-network
+      - internal
+    deploy:
+      replicas: 1
+      update_config:
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "1"
+          memory: 768M
+
+  db:
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    user: postgres
+    cap_drop: [ALL]
+    read_only: true
+    environment:
+      - POSTGRES_DB=umami
+      - POSTGRES_USER=umami
+      - POSTGRES_PASSWORD=${UMAMI_DB_PWD?Variable not set}
+    volumes:
+      - umami_db_data:/var/lib/postgresql/data
+      - type: tmpfs
+        target: /tmp
+      - type: tmpfs
+        target: /var/run/postgresql
+    labels:
+      - "traefik.enable=false"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U umami -d umami"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+volumes:
+  umami_db_data:
+
+networks:
+  dokploy-network:
+    external: true
+  internal:
+    driver: bridge
