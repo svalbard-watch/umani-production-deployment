@@ -1,0 +1,11 @@
+# Ignore all .env files, except the template
+.env
+!.env.example
+
+*.crt
+*.pem
+*.key
+
+# Python
+__pycache__/
+.pytest_cache/
