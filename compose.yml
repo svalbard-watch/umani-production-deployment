@@ -28,9 +28,10 @@ services:
       - DATABASE_URL=postgresql://umami:${UMAMI_DB_PWD?Variable not set}@db:5432/umami
       - APP_SECRET=${UMAMI_APP_SECRET?Variable not set}
       - DISABLE_TELEMETRY=1
+    # List form only: Swarm (Dokploy) rejects the map form and ignores conditions. Umami
+    # retries until Postgres accepts connections (restart policy + the healthcheck below).
     depends_on:
-      db:
-        condition: service_healthy
+      - db
     volumes:
       - type: tmpfs
         target: /tmp
