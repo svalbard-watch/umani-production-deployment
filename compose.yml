@@ -42,6 +42,9 @@ services:
     environment:
       - DATABASE_URL=postgresql://umami:${UMAMI_DB_PWD?Variable not set}@db:5432/umami
       - APP_SECRET=${UMAMI_APP_SECRET?Variable not set}
+      # Encrypts the stored TOTP secrets; 2FA does not work without it. Changing it later
+      # locks every user out of 2FA, so keep it stable.
+      - TWO_FACTOR_ENCRYPTION_KEY=${UMAMI_TWO_FACTOR_KEY?Variable not set}
       - DISABLE_TELEMETRY=1
     # List form only: Swarm (Dokploy) rejects the map form and ignores conditions. Umami
     # exits until Postgres accepts connections, and deploy.restart_policy retries.

@@ -32,6 +32,7 @@ jobs:
           UMAMI_HOST=umami.localhost
           UMAMI_APP_SECRET=smoke-test-secret-not-used-anywhere-else
           UMAMI_DB_PWD=smoketestpassword
+          UMAMI_TWO_FACTOR_KEY=1111111111111111111111111111111111111111111111111111111111111111
           TRAEFIK_CERT_RESOLVER=
           EOF
 
