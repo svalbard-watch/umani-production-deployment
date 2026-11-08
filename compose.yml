@@ -16,10 +16,12 @@
 #
 # Permissions (Swarm honours cap_drop, read_only and user; it ignores security_opt and the
 # tmpfs: shorthand, hence the `type: tmpfs` volume mounts):
+#   - Nothing runs as root. Svalbard Watch may use uids above 9200: Umami runs as 9201:9201.
+#   - Postgres runs as the image's own unprivileged user (uid 70), from the start (the
+#     image's root-then-gosu switch needs capabilities we drop). It is outside the 9200+ range
+#     on purpose: running it as 9201 needs a custom image, because initdb needs a passwd entry
+#     and a fresh named volume is only writable by the uid the image owns the data dir with.
 #   - Capabilities are dropped on both containers.
-#   - Postgres runs as its own user from the start (the image's root-then-gosu switch needs
-#     capabilities we drop). A fresh named volume is initialised by the image owned by that
-#     user.
 
 x-umami-labels: &umami-labels
   - "traefik.enable=true"
@@ -34,6 +36,7 @@ services:
 
   umami:
     image: ghcr.io/umami-software/umami:3.4.1
+    user: "9201:9201"
     cap_drop: [ALL]
     read_only: true
     environment:
