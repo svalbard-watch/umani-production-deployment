@@ -1,7 +1,11 @@
-name: SW-UMAMI-Services
-
 # Umami web analytics (umami + PostgreSQL) as a single Dokploy stack (Docker Swarm mode,
 # single node). Dokploy only accepts one compose file per project.
+#
+# Deployed with `docker stack deploy`, which is stricter than `docker compose`: no top-level
+# `name:` (the stack name comes from Dokploy), `restart:` is ignored (deploy.restart_policy
+# is used), Traefik reads the labels under deploy.labels, and a network without a driver is
+# an overlay network (plain `docker compose`, used by the CI smoke test, makes it a bridge).
+# The labels are therefore defined once and set in both places.
 #
 # Production only: there is no staging variant. Everything environment-specific comes from
 # environment variables (set in Dokploy; .env.example lists them). Secrets are plain env
@@ -17,11 +21,19 @@ name: SW-UMAMI-Services
 #     capabilities we drop). A fresh named volume is initialised by the image owned by that
 #     user.
 
+x-umami-labels: &umami-labels
+  - "traefik.enable=true"
+  - "traefik.docker.network=dokploy-network"
+  - "traefik.http.routers.umami.rule=Host(`${UMAMI_HOST?Variable not set}`)"
+  - "traefik.http.routers.umami.entrypoints=websecure"
+  - "traefik.http.routers.umami.tls=true"
+  - "traefik.http.routers.umami.tls.certresolver=${TRAEFIK_CERT_RESOLVER-letsencrypt}"
+  - "traefik.http.services.umami.loadbalancer.server.port=3000"
+
 services:
 
   umami:
     image: ghcr.io/umami-software/umami:3.4.1
-    restart: unless-stopped
     cap_drop: [ALL]
     read_only: true
     environment:
@@ -29,7 +41,7 @@ services:
       - APP_SECRET=${UMAMI_APP_SECRET?Variable not set}
       - DISABLE_TELEMETRY=1
     # List form only: Swarm (Dokploy) rejects the map form and ignores conditions. Umami
-    # retries until Postgres accepts connections (restart policy + the healthcheck below).
+    # exits until Postgres accepts connections, and deploy.restart_policy retries.
     depends_on:
       - db
     volumes:
@@ -37,14 +49,7 @@ services:
         target: /tmp
       - type: tmpfs
         target: /app/.next/cache
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=dokploy-network"
-      - "traefik.http.routers.umami.rule=Host(`${UMAMI_HOST?Variable not set}`)"
-      - "traefik.http.routers.umami.entrypoints=websecure"
-      - "traefik.http.routers.umami.tls=true"
-      - "traefik.http.routers.umami.tls.certresolver=${TRAEFIK_CERT_RESOLVER-letsencrypt}"
-      - "traefik.http.services.umami.loadbalancer.server.port=3000"
+    labels: *umami-labels
     healthcheck:
       test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:3000/api/heartbeat >/dev/null || exit 1"]
       interval: 30s
@@ -56,6 +61,9 @@ services:
       - internal
     deploy:
       replicas: 1
+      labels: *umami-labels
+      restart_policy:
+        condition: on-failure
       update_config:
         order: start-first
         failure_action: rollback
@@ -66,7 +74,6 @@ services:
 
   db:
     image: postgres:17.11-alpine
-    restart: unless-stopped
     user: postgres
     cap_drop: [ALL]
     read_only: true
@@ -92,6 +99,8 @@ services:
       - internal
     deploy:
       replicas: 1
+      restart_policy:
+        condition: any
       update_config:
         order: stop-first
         failure_action: rollback
@@ -106,5 +115,4 @@ volumes:
 networks:
   dokploy-network:
     external: true
-  internal:
-    driver: bridge
+  internal: {}
