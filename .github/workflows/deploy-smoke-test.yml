@@ -1,0 +1,101 @@
+name: Deployment smoke test
+
+# Gates every PR into main (including the automatic image-bump PRs opened by
+# update-versions.yml): brings the real stack up behind the same Traefik setup used for
+# local testing (traefik-testing/), waits for both healthchecks and requests Umami through
+# Traefik. Make it a required status check in main's branch protection - that cannot be
+# configured from this file.
+#
+# No paths: filter on purpose, so it can never be silently skipped.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Write placeholder .env
+        run: |
+          cat > .env <<'EOF'
+          UMAMI_HOST=umami.localhost
+          UMAMI_APP_SECRET=smoke-test-secret-not-used-anywhere-else
+          UMAMI_DB_PWD=smoketestpassword
+          TRAEFIK_CERT_RESOLVER=
+          EOF
+
+      - name: Validate compose file
+        run: docker compose -f compose.yml config >/dev/null
+
+      - name: Resolve *.localhost hostnames explicitly
+        run: echo "127.0.0.1 umami.localhost dashboard.localhost" | sudo tee -a /etc/hosts
+
+      - name: Create external network (Dokploy provides this in production)
+        run: docker network create dokploy-network
+
+      - name: Generate local TLS cert for Traefik
+        run: |
+          mkdir -p traefik-testing/certs
+          openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+            -keyout traefik-testing/certs/local.key -out traefik-testing/certs/local.crt \
+            -subj "/CN=*.localhost"
+
+      - name: Start Traefik
+        run: docker compose -f traefik-testing/compose.yml up -d
+
+      - name: Bring the stack up
+        run: docker compose -f compose.yml up -d
+
+      - name: Wait for services to report healthy
+        run: |
+          timeout=300
+          elapsed=0
+          services="db umami"
+          while true; do
+            unhealthy=""
+            for s in $services; do
+              for cid in $(docker compose -f compose.yml ps -q "$s"); do
+                status=$(docker inspect --format='{{.State.Health.Status}}' "$cid" 2>/dev/null || echo "unknown")
+                if [ "$status" != "healthy" ]; then
+                  unhealthy="$unhealthy $s:${cid:0:12}($status)"
+                fi
+              done
+            done
+            if [ -z "$unhealthy" ]; then
+              echo "All services healthy."
+              break
+            fi
+            if [ "$elapsed" -ge "$timeout" ]; then
+              echo "Timed out waiting for:$unhealthy"
+              docker compose -f compose.yml logs
+              exit 1
+            fi
+            echo "Waiting on:$unhealthy"
+            sleep 10
+            elapsed=$((elapsed + 10))
+          done
+
+      - name: Request Umami through Traefik
+        run: |
+          set -euo pipefail
+          curl -ksSf https://umami.localhost/api/heartbeat
+          echo
+          # The login page proves the app can reach its database and finished its migrations.
+          code=$(curl -ks -o /dev/null -w '%{http_code}' https://umami.localhost/login)
+          echo "GET /login -> $code"
+          [ "$code" = "200" ]
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose -f compose.yml logs --no-color
