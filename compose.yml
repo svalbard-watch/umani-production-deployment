@@ -35,7 +35,7 @@ x-umami-labels: &umami-labels
 services:
 
   umami:
-    image: ghcr.io/umami-software/umami:3.4.1
+    image: ghcr.io/umami-software/umami:3.5.0
     user: "9201:9201"
     cap_drop: [ALL]
     read_only: true
