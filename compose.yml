@@ -46,6 +46,7 @@ services:
       # locks every user out of 2FA, so keep it stable.
       - TWO_FACTOR_ENCRYPTION_KEY=${UMAMI_TWO_FACTOR_KEY?Variable not set}
       - DISABLE_TELEMETRY=1
+      - SALT_ROTATION=${UMAMI_SALT_ROTATION:-month}
     # List form only: Swarm (Dokploy) rejects the map form and ignores conditions. Umami
     # exits until Postgres accepts connections, and deploy.restart_policy retries.
     depends_on:
